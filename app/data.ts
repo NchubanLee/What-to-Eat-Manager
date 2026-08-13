@@ -3,11 +3,14 @@ export type Kind = "meat" | "veg";
 export type Ingredient = { id: string; name: string; grams: number; kind: Kind };
 export type Recipe = { id: string; name: string; kind: Kind; source: "Bryan Johnson" | "泡厨房的顾小胖"; link: string; protein?: string; minutes: number; method: string; spice: string; color: string; ingredients: Ingredient[]; extras: string[] };
 export type Meal = { id: string; date: string; recipeIds: string[]; done: boolean };
-export type Batch = { id: string; ingredientId: string; name: string; kind: Kind; grams: number; storage: "冷藏" | "冷冻" | "常温"; purchased: string; expires: string };
+export type StorageMode = "冷藏" | "冷冻" | "常温";
+export type ExpirySource = "explicit-expiry" | "production-plus-shelf-life" | "default-freshness" | "manual";
+export type Batch = { id: string; ingredientId: string; name: string; kind: Kind; grams: number; storage: StorageMode; purchased: string; productionDate?: string; shelfLifeDays?: number; expires: string; expirySource: ExpirySource; transcript?: string; transcriptionEngine?: "whisper-web" | "whisper-ios" | "manual"; createdAt: string; updatedAt: string };
 export type Usage = { mealId: string; amounts: Record<string, number>; deductions: { batchId: string; grams: number }[] };
-export type State = { version: 1; start: string; meals: Meal[]; stock: Batch[]; usage: Usage[] };
+export type State = { version: 2; start: string; meals: Meal[]; stock: Batch[]; usage: Usage[] };
 export const DAY = 86400000;
 export const KEY = "shiwei-meal-planner-v1";
+export const STATE_VERSION = 2;
 const bryan = "https://blueprint.bryanjohnson.com/blogs/news/blueprint-recipes";
 const gu = "https://space.bilibili.com/474803476/video";
 const I = (id: string, name: string, grams: number, kind: Kind): Ingredient => ({ id, name, grams, kind });
@@ -38,14 +41,18 @@ export function iso(value:Date|number=new Date()){const d=new Date(value);return
 export function add(date:string,days:number){return iso(new Date(`${date}T12:00:00`).getTime()+days*DAY)}
 export function makeMeals(start:string):Meal[]{return offsets.map((n,i)=>({id:`meal-${i}`,date:add(start,n),recipeIds:[...templates[i]],done:false}))}
 function initialStock(today:string):Batch[]{return[
- {id:"b1",ingredientId:"chicken-thigh",name:"鸡腿肉",kind:"meat",grams:700,storage:"冷冻",purchased:add(today,-2),expires:add(today,28)},
- {id:"b2",ingredientId:"broccoli",name:"西兰花",kind:"veg",grams:520,storage:"冷藏",purchased:add(today,-2),expires:add(today,2)},
- {id:"b3",ingredientId:"carrot",name:"胡萝卜",kind:"veg",grams:650,storage:"冷藏",purchased:add(today,-4),expires:add(today,7)},
- {id:"b4",ingredientId:"fish",name:"鲈鱼",kind:"meat",grams:500,storage:"冷藏",purchased:today,expires:add(today,1)},
- {id:"b5",ingredientId:"onion",name:"洋葱",kind:"veg",grams:900,storage:"常温",purchased:add(today,-5),expires:add(today,12)},
- {id:"b6",ingredientId:"mushroom",name:"白蘑菇",kind:"veg",grams:260,storage:"冷藏",purchased:add(today,-3),expires:add(today,-1)}]}
-export function createInitial():State{const today=iso();return{version:1,start:today,meals:makeMeals(today),stock:initialStock(today),usage:[]}}
+ {id:"b1",ingredientId:"chicken-thigh",name:"鸡腿肉",kind:"meat",grams:700,storage:"冷冻",purchased:add(today,-2),expires:add(today,28),expirySource:"default-freshness",createdAt:today,updatedAt:today},
+ {id:"b2",ingredientId:"broccoli",name:"西兰花",kind:"veg",grams:520,storage:"冷藏",purchased:add(today,-2),expires:add(today,2),expirySource:"default-freshness",createdAt:today,updatedAt:today},
+ {id:"b3",ingredientId:"carrot",name:"胡萝卜",kind:"veg",grams:650,storage:"冷藏",purchased:add(today,-4),expires:add(today,7),expirySource:"default-freshness",createdAt:today,updatedAt:today},
+ {id:"b4",ingredientId:"fish",name:"鲈鱼",kind:"meat",grams:500,storage:"冷藏",purchased:today,expires:add(today,1),expirySource:"default-freshness",createdAt:today,updatedAt:today},
+ {id:"b5",ingredientId:"onion",name:"洋葱",kind:"veg",grams:900,storage:"常温",purchased:add(today,-5),expires:add(today,12),expirySource:"default-freshness",createdAt:today,updatedAt:today},
+ {id:"b6",ingredientId:"mushroom",name:"白蘑菇",kind:"veg",grams:260,storage:"冷藏",purchased:add(today,-3),expires:add(today,-1),expirySource:"default-freshness",createdAt:today,updatedAt:today}]}
+export function createInitial():State{const today=iso();return{version:STATE_VERSION,start:today,meals:makeMeals(today),stock:initialStock(today),usage:[]}}
+export function migrateState(value:unknown):State{const fallback=createInitial();if(!value||typeof value!=="object")return fallback;const old=value as Partial<State>&{stock?:Partial<Batch>[]};return{version:STATE_VERSION,start:old.start||fallback.start,meals:Array.isArray(old.meals)?old.meals:fallback.meals,usage:Array.isArray(old.usage)?old.usage:[],stock:Array.isArray(old.stock)?old.stock.map((b,i)=>{const now=iso();return{id:b.id||`migrated-${i}`,ingredientId:b.ingredientId||`custom-${i}`,name:b.name||"未命名食材",kind:b.kind||"veg",grams:Number(b.grams)||0,storage:b.storage||"冷藏",purchased:b.purchased||now,productionDate:b.productionDate,shelfLifeDays:b.shelfLifeDays,expires:b.expires||expiry(b.purchased||now,b.kind||"veg",b.storage||"冷藏",b.name),expirySource:b.expirySource||"default-freshness",transcript:b.transcript,transcriptionEngine:b.transcriptionEngine,createdAt:b.createdAt||now,updatedAt:b.updatedAt||now}}):fallback.stock}}
 export function aggregate(ids:string[]){const map=new Map<string,Ingredient>();ids.forEach(id=>recipeMap.get(id)?.ingredients.forEach(x=>map.set(x.id,{...x,grams:(map.get(x.id)?.grams||0)+x.grams})));return[...map.values()]}
 export function fresh(expires:string){const d=Math.ceil((new Date(`${expires}T12:00:00`).getTime()-new Date(`${iso()}T12:00:00`).getTime())/DAY);return d<0?{cls:"bad",text:`已过期 ${-d} 天`,days:d}:d<=2?{cls:"warn",text:d===0?"今天到期":`剩 ${d} 天`,days:d}:{cls:"good",text:`剩 ${d} 天`,days:d}}
-export function expiry(purchased:string,kind:Kind,storage:Batch["storage"]){return add(purchased,storage==="冷冻"?(kind==="meat"?30:21):storage==="常温"?10:kind==="meat"?2:5)}
+const freshnessDays:Record<string,Partial<Record<StorageMode,number>>>={"鲜虾":{"冷藏":1,"冷冻":60},"鲈鱼":{"冷藏":1,"冷冻":60},"鱼片":{"冷藏":1,"冷冻":60},"白蘑菇":{"冷藏":4},"香菇":{"冷藏":5},"金针菇":{"冷藏":5},"生菜":{"冷藏":4},"豆芽":{"冷藏":2},"西兰花":{"冷藏":5},"羽衣甘蓝":{"冷藏":5},"小葱":{"冷藏":6},"鸡腿肉":{"冷藏":2,"冷冻":90},"牛腩":{"冷藏":3,"冷冻":90},"猪里脊":{"冷藏":3,"冷冻":90},"猪肋排":{"冷藏":3,"冷冻":90}};
+export function defaultFreshnessDays(name:string,kind:Kind,storage:StorageMode){return freshnessDays[name]?.[storage]??(storage==="冷冻"?(kind==="meat"?90:30):storage==="常温"?10:kind==="meat"?2:5)}
+export function expiry(base:string,kind:Kind,storage:StorageMode,name=""){return add(base,defaultFreshnessDays(name,kind,storage))}
+export const expirySourceText:Record<ExpirySource,string>={"explicit-expiry":"包装到期日","production-plus-shelf-life":"生产日 + 保质期","default-freshness":"食材默认新鲜期","manual":"手动修正"};
 export function format(date:string){return new Date(`${date}T12:00:00`).toLocaleDateString("zh-CN",{month:"short",day:"numeric",weekday:"short"})}
